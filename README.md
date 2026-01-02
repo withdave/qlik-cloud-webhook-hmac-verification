@@ -2,6 +2,8 @@
 
 Cloudflare Worker that receives webhooks from Qlik Cloud, verifies them using HMAC-SHA256, and triggers GitHub Actions workflows to verify branch creation.
 
+[![Webhook Branch Verification](https://github.com/withdave/qlik-cloud-webhook-hmac-verification/actions/workflows/webhook-branch-check.yml/badge.svg?event=repository_dispatch)](https://github.com/withdave/qlik-cloud-webhook-hmac-verification/actions/workflows/webhook-branch-check.yml)
+
 ## Features
 
 - Receives POST requests from Qlik Cloud webhooks
