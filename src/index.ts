@@ -77,18 +77,24 @@ export default {
 			);
 		}
 
-		// Log automation run id and automation id
+		// Extract automation run id and automation id
 		const automationRunId = body.data.id;
 		const automationId = body.data.automation.id;
-		console.log(`Automation run ID (data.id): ${automationRunId}`);
-		console.log(`Automation ID (data.automation.id): ${automationId}`);
 
 		// Forward the webhook to GitHub Actions via repository_dispatch
 		if (env.GITHUB_TOKEN && env.GITHUB_REPO) {
 			try {
-				const [owner, repo] = env.GITHUB_REPO.split('/');
-				if (!owner || !repo) {
-					throw new Error('Invalid GITHUB_REPO format. Expected: owner/repo');
+				// Validate and parse repository
+				const repoValue = env.GITHUB_REPO.trim();
+				const [owner, repo] = repoValue.split('/');
+				if (!owner || !repo || repoValue.split('/').length !== 2) {
+					throw new Error(`Invalid GITHUB_REPO format: "${repoValue}". Expected: owner/repo`);
+				}
+
+				// Validate token format (should not be empty and should not have obvious issues)
+				const token = env.GITHUB_TOKEN.trim();
+				if (!token || token.length < 10) {
+					throw new Error('GITHUB_TOKEN appears to be invalid or too short');
 				}
 
 				const githubApiUrl = `https://api.github.com/repos/${owner}/${repo}/dispatches`;
@@ -105,7 +111,7 @@ export default {
 					method: 'POST',
 					headers: {
 						'Content-Type': 'application/json',
-						'Authorization': `Bearer ${env.GITHUB_TOKEN}`,
+						'Authorization': `Bearer ${token}`,
 						'Accept': 'application/vnd.github.v3+json',
 						'User-Agent': 'Qlik-Cloud-Webhook-Worker',
 					},
@@ -114,15 +120,38 @@ export default {
 
 				if (!forwardResponse.ok) {
 					const errorText = await forwardResponse.text();
+					let errorDetails;
+					try {
+						errorDetails = JSON.parse(errorText);
+					} catch {
+						errorDetails = errorText;
+					}
+					
 					console.error(`Failed to trigger GitHub Actions: ${forwardResponse.status} ${forwardResponse.statusText}`);
+					console.error(`Repository: ${owner}/${repo}`);
 					console.error(`Error details: ${errorText}`);
+					
+					// Provide more helpful error messages
+					let helpfulMessage = 'Failed to trigger GitHub Actions';
+					if (forwardResponse.status === 403) {
+						helpfulMessage = '403 Forbidden: Token may lack required permissions. Ensure token has "Actions: Read and write" permission for repository_dispatch events.';
+					} else if (forwardResponse.status === 404) {
+						helpfulMessage = `404 Not Found: Repository "${owner}/${repo}" not found or token doesn't have access to it.`;
+					} else if (forwardResponse.status === 401) {
+						helpfulMessage = '401 Unauthorized: Token is invalid or expired.';
+					}
+					
 					return new Response(
 						JSON.stringify({ 
 							success: true, 
 							verified: true,
 							forwarded: false,
-							error: 'Failed to trigger GitHub Actions',
-							details: errorText
+							automationId: automationId,
+							automationRunId: automationRunId,
+							error: helpfulMessage,
+							statusCode: forwardResponse.status,
+							repository: `${owner}/${repo}`,
+							details: errorDetails
 						}),
 						{ 
 							status: 200,
@@ -136,7 +165,9 @@ export default {
 					JSON.stringify({ 
 						success: true, 
 						verified: true,
-						forwarded: true
+						forwarded: true,
+						automationId: automationId,
+						automationRunId: automationRunId
 					}),
 					{ 
 						status: 200,
@@ -150,6 +181,8 @@ export default {
 						success: true, 
 						verified: true,
 						forwarded: false,
+						automationId: automationId,
+						automationRunId: automationRunId,
 						error: 'Error forwarding webhook',
 						details: error instanceof Error ? error.message : String(error)
 					}),
@@ -163,7 +196,12 @@ export default {
 
 		// If no forwarding URL is configured, just return success
 		return new Response(
-			JSON.stringify({ success: true, verified: true }),
+			JSON.stringify({ 
+				success: true, 
+				verified: true,
+				automationId: automationId,
+				automationRunId: automationRunId
+			}),
 			{ 
 				status: 200,
 				headers: { 'Content-Type': 'application/json' }

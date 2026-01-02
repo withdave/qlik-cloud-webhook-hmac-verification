@@ -33,9 +33,33 @@ GITHUB_REPO=owner/repo-name
 **Note:** The `.dev.vars` file is gitignored and should not be committed to version control.
 
 **GitHub Token Requirements:**
-- Create a Personal Access Token (PAT) with `repo` scope
-- Or use a GitHub App token with repository access
-- The token needs permission to trigger `repository_dispatch` events
+
+You must use a **Fine-Grained Personal Access Token** with the following configuration:
+
+1. **Create a Fine-Grained Token**:
+   - Go to GitHub Settings → Developer settings → Personal access tokens → Fine-grained tokens
+   - Click "Generate new token"
+
+2. **Configure Repository Access**:
+   - **Repository access**: Select "Only select repositories"
+   - Choose the repository: `withdave/qlik-cloud-webhook-hmac-verification` (or your target repository)
+
+3. **Set Repository Permissions**:
+   - **Actions**: `Read and write` (required to trigger `repository_dispatch` events)
+   - **Contents**: `Read and write` (required for the workflow to delete branches)
+
+4. **Important Notes**:
+   - Fine-grained tokens require explicit "Read and write" permission for both Actions and Contents
+   - Actions: Read and write is required to trigger `repository_dispatch` events
+   - Contents: Read and write is required for the workflow to delete branches
+   - The token must have access to the specific repository you're trying to trigger
+   - Ensure the token hasn't expired
+
+**If you're getting a 403 error**, verify:
+- The token has **Actions: Read and write** permission (not just Read)
+- The token has **Contents: Read and write** permission (not just Read)
+- The token has access to the specific repository
+- The token hasn't expired
 
 ### 3. Set Cloudflare Secrets
 
@@ -45,7 +69,7 @@ For production deployment, set secrets using Wrangler. Since `wrangler` is insta
 # Set the Qlik webhook secret
 npx wrangler secret put QLIK_WEBHOOK_SECRET
 
-# Set the GitHub token (with repo scope)
+# Set the GitHub fine-grained token (with Actions: Read and write permission)
 npx wrangler secret put GITHUB_TOKEN
 
 # Set the GitHub repository (format: owner/repo)
@@ -90,13 +114,31 @@ The worker accepts POST requests at `/webhook` with the following:
 
 ### Example Response
 
+**Successful Response:**
 ```json
 {
   "success": true,
   "verified": true,
-  "forwarded": true
+  "forwarded": true,
+  "automationId": "automation-12345",
+  "automationRunId": "run-67890"
 }
 ```
+
+**Error Response (when GitHub Actions trigger fails):**
+```json
+{
+  "success": true,
+  "verified": true,
+  "forwarded": false,
+  "automationId": "automation-12345",
+  "automationRunId": "run-67890",
+  "error": "Failed to trigger GitHub Actions",
+  "details": "{\"message\":\"Resource not accessible by personal access token\",...}"
+}
+```
+
+**Note**: All responses include `automationId` (from `data.automation.id`) and `automationRunId` (from `data.id`) to help track and debug webhook processing.
 
 ## How It Works
 
@@ -144,12 +186,13 @@ The test solution verifies the entire webhook flow by:
 
 2. **Cloudflare Worker** deployed with:
    - `QLIK_WEBHOOK_SECRET` secret configured
-   - `GITHUB_TOKEN` secret configured (with `repo` scope)
+   - `GITHUB_TOKEN` secret configured
    - `GITHUB_REPO` secret configured (format: `owner/repo`)
 
 3. **GitHub Repository** with:
    - GitHub Actions enabled
    - The workflow file (`.github/workflows/webhook-branch-check.yml`) committed
+   - **Workflow Permissions**: The workflow requires `contents: write` permission to delete branches (already configured in the workflow file)
 
 ### Test Flow
 
@@ -251,32 +294,10 @@ The webhook from Qlik Cloud should include an `id` field in the body. Example:
 ```
 
 The GitHub Action will look for a branch named `automation-12345` (the value of the `id` field).
-
-### Troubleshooting
-
-1. **Webhook not received**:
-   - Check Cloudflare Worker logs
-   - Verify webhook URL is correct
-   - Check Qlik Cloud webhook configuration
-
-2. **Signature verification fails**:
-   - Ensure `QLIK_WEBHOOK_SECRET` matches the secret in Qlik Cloud
-   - Verify the raw body is used for HMAC computation
-
-3. **GitHub Action not triggered**:
-   - Check `GITHUB_TOKEN` has `repo` scope
-   - Verify `GITHUB_REPO` format is `owner/repo`
-   - Check GitHub API rate limits
-
-4. **Branch not found**:
-   - Verify the `id` in webhook matches the branch name
-   - Check branch was actually created
-   - Review GitHub Action logs for details
-
 ### Monitoring
 
 - **Cloudflare Worker Logs**: Available in Cloudflare Dashboard
 - **GitHub Actions Logs**: Available in the Actions tab of the repository
-- **Qlik Cloud Logs**: Available in Qlik Cloud monitoring
+- **Qlik Cloud Logs**: Available in Qlik Cloud admin console under webhooks tab
 
 This test solution provides end-to-end verification of the webhook integration, ensuring that webhooks are properly verified and that the GitHub Actions workflow correctly processes the automation events.

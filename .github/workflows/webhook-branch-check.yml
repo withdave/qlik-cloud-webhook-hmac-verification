@@ -20,7 +20,6 @@ jobs:
         id: webhook
         run: |
           PAYLOAD='${{ toJson(github.event.client_payload) }}'
-          echo "payload=$PAYLOAD" >> $GITHUB_OUTPUT
           
           # Extract data.id from the webhook body (automation run id)
           ID=$(echo "$PAYLOAD" | jq -r '.body.data.id // empty')
