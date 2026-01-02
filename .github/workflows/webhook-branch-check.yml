@@ -1,0 +1,95 @@
+name: Webhook Branch Verification
+
+on:
+  repository_dispatch:
+    types: [qlik-webhook]
+
+jobs:
+  verify-branch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract webhook data
+        id: webhook
+        run: |
+          PAYLOAD='${{ toJson(github.event.client_payload) }}'
+          echo "payload=$PAYLOAD" >> $GITHUB_OUTPUT
+          
+          # Extract data.id from the webhook body (automation run id)
+          ID=$(echo "$PAYLOAD" | jq -r '.body.data.id // empty')
+          if [ -z "$ID" ]; then
+            echo "Error: No data.id found in webhook payload"
+            echo "$PAYLOAD" | jq '.'
+            exit 1
+          fi
+          echo "id=$ID" >> $GITHUB_OUTPUT
+          echo "Found automation run ID (data.id): $ID"
+          
+          # Extract verification status
+          VERIFIED=$(echo "$PAYLOAD" | jq -r '.verified // false')
+          echo "verified=$VERIFIED" >> $GITHUB_OUTPUT
+          echo "Verification status: $VERIFIED"
+
+      - name: Check if branch exists
+        id: check-branch
+        run: |
+          BRANCH_NAME="${{ steps.webhook.outputs.id }}"
+          echo "Checking for branch: $BRANCH_NAME"
+          
+          if git ls-remote --heads origin "$BRANCH_NAME" | grep -q "$BRANCH_NAME"; then
+            echo "Branch '$BRANCH_NAME' exists ✓"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Branch '$BRANCH_NAME' does not exist ✗"
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Delete branch if it exists
+        if: steps.check-branch.outputs.exists == 'true'
+        run: |
+          BRANCH_NAME="${{ steps.webhook.outputs.id }}"
+          echo "Deleting branch: $BRANCH_NAME"
+          
+          # Delete local branch if it exists
+          git branch -D "$BRANCH_NAME" 2>/dev/null || true
+          
+          # Delete remote branch
+          git push origin --delete "$BRANCH_NAME" || {
+            echo "Warning: Failed to delete remote branch (may already be deleted)"
+          }
+          
+          echo "Branch '$BRANCH_NAME' deleted successfully"
+
+      - name: Set job status
+        id: job-status
+        run: |
+          if [ "${{ steps.check-branch.outputs.exists }}" == "true" ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "result=Branch found and deleted successfully" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "result=Branch not found" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Report results
+        run: |
+          echo "## Webhook Branch Verification Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Webhook ID**: \`${{ steps.webhook.outputs.id }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Verification Status**: ${{ steps.webhook.outputs.verified }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch Exists**: ${{ steps.check-branch.outputs.exists }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Result**: ${{ steps.job-status.outputs.result }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Fail if branch not found
+        if: steps.check-branch.outputs.exists != 'true'
+        run: |
+          echo "❌ Branch '${{ steps.webhook.outputs.id }}' was not found in the repository"
+          exit 1
+
